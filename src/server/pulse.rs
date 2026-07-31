@@ -726,59 +726,60 @@ impl Volume {
 
 impl <'a> From<&SinkInputInfo<'a>> for OutputClient {
     fn from(sink_input: &SinkInputInfo<'a>) -> Self {
--        let name = sink_input.proplist.get_str("application.name").unwrap_or_default();
--        let description = sink_input.name.as_ref().map(Cow::to_string).unwrap_or_default();
--        let icon = sink_input.proplist.get_str("application.icon_name");
--        let process = sink_input.proplist.get_str("application.process.id")
--            .and_then(|b| b.parse::<u32>().ok());
-+        // Prefer stable programmatic identifier fields where available. Fall back to human-friendly
-+        // sink_input.name (description) only if no other id is present. This ensures loopback
-+        // and filter-chain nodes (which set media.name/node.name) expose a usable `name` for
-+        // filtering and programmatic identification.
-+        let app_name = sink_input.proplist.get_str("application.name");
-+        let media_name = sink_input.proplist.get_str("media.name");
-+        let node_name = sink_input.proplist.get_str("node.name");
-+        let fallback_name = sink_input.name.as_ref().map(Cow::as_ref);
-+
-+        let name = app_name
-+            .or(media_name)
-+            .or(node_name)
-+            .or(fallback_name)
-+            .unwrap_or_default()
-+            .to_string();
-+
-+        // Keep description for UI-friendly text (still useful when name is an internal id)
-+        let description = sink_input.name.as_ref().map(Cow::to_string).unwrap_or_default();
-+        let icon = sink_input.proplist.get_str("application.icon_name");
-+        let process = sink_input.proplist.get_str("application.process.id")
-+            .and_then(|b| b.parse::<u32>().ok());
-@@
--        OutputClient {
--            id: sink_input.index,
--            process,
--            name,
--            description,
--            icon,
--            volume,
--            max_volume: 2.55,
--            muted: sink_input.mute,
--            corked: sink_input.corked,
--            kind: Kind::Out | Kind::Software,
--        }
-+        OutputClient {
-+            id: sink_input.index,
-+            process,
-+            name,
-+            description,
-+            icon,
-+            volume,
-+            max_volume: 2.55,
-+            muted: sink_input.mute,
-+            corked: sink_input.corked,
-+            kind: Kind::Out | Kind::Software,
-+        }
-     }
- }
+        // Prefer stable programmatic identifier fields where available. Fall back to human-friendly
+        // sink_input.name (description) only if no other id is present. This ensures loopback
+        // and filter-chain nodes (which set media.name/node.name) expose a usable `name` for
+        // filtering and programmatic identification.
+        let app_name = sink_input.proplist.get_str("application.name");
+        let media_name = sink_input.proplist.get_str("media.name");
+        let node_name = sink_input.proplist.get_str("node.name");
+        let fallback_name = sink_input.name.as_ref().map(Cow::as_ref);
+
+        let name = app_name
+            .or(media_name)
+            .or(node_name)
+            .or(fallback_name)
+            .unwrap_or_default()
+            .to_string();
+
+        // Keep description for UI-friendly text (still useful when name is an internal id)
+        let description = sink_input.name.as_ref().map(Cow::to_string).unwrap_or_default();
+        let icon = sink_input.proplist.get_str("application.icon_name");
+        let process = sink_input.proplist.get_str("application.process.id")
+            .and_then(|b| b.parse::<u32>().ok());
+
+        // This would be the correct approach, but things get weird after 255%
+        // static VOLUME_MAX: OnceLock<f64> = OnceLock::new();
+        // let max = *VOLUME_MAX.get_or_init(|| VolumeLinear::from(libpulse_binding::volume::Volume::ui_max()).0);
+
+        let volume = Volume {
+            levels: {
+                let levels: &[u32] = unsafe {
+                    use libpulse_binding::volume::Volume;
+
+                    std::mem::transmute::<&[Volume], &[u32]>(sink_input.volume.get())
+                };
+
+                VolumeLevels(SmallVec::from_slice(&levels[..sink_input.volume.len() as usize]))
+            },
+            percent: &Volume::pulse_linear,
+            set_percent: &Volume::set_pulse_linear,
+        };
+
+        OutputClient {
+            id: sink_input.index,
+            process,
+            name,
+            description,
+            icon,
+            volume,
+            max_volume: 2.55,
+            muted: sink_input.mute,
+            corked: sink_input.corked,
+            kind: Kind::Out | Kind::Software,
+        }
+    }
+}
 
 impl <'a> From<&SinkInfo<'a>> for OutputClient {
     fn from(sink: &SinkInfo<'a>) -> Self {
