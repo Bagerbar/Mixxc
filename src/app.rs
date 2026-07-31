@@ -49,7 +49,7 @@ pub struct Config {
     pub show_corked: bool,
     pub per_process: bool,
     pub userstyle: Option<std::path::PathBuf>,
-+    pub hide_passive: bool,
+    pub hide_passive: bool,
 
     #[cfg(feature = "Accent")]
     pub accent: bool,
@@ -121,7 +121,7 @@ impl AsyncComponent for App {
                     add_css_class:   "main",
                     set_has_icons:   config.show_icons,
                     set_show_corked: config.show_corked,
-+                    set_hide_passive: config.hide_passive,
+                    set_hide_passive: config.hide_passive,
                     set_spacing:     config.spacing,
                     set_max_value:   config.max_volume,
                     set_orientation: if config.horizontal {
@@ -311,4 +311,4 @@ impl AsyncComponent for App {
                     shutdown.cancel();
                 }
 
-{
+            
