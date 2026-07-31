@@ -429,17 +429,34 @@ fn add_sink_input(info: ListResult<&SinkInputInfo>, context: &WeakContext, sende
     if let ListResult::Item(info) = info {
         if !info.has_volume { return }
 
+        // Build client but only advertise passive nodes when they produce audio.
         let client: Box<OutputClient> = Box::new(info.into());
         let id = client.id;
 
-        let msg: Message = MessageClient::New(client).into();
-        sender.emit(msg);
+        // Consider a node "passive" when it lacks application/media name but has a node.name
+        let is_passive = info.proplist.get_str("application.name").is_none()
+            && info.proplist.get_str("media.name").is_none()
+            && info.proplist.get_str("node.name").is_some();
+
+        if !is_passive {
+            let msg: Message = MessageClient::New(client).into();
+            sender.emit(msg);
+        }
 
         let guard = context.lock();
         let mut context = guard.borrow_mut();
 
         if let State::Ready = context.get_state() {
-            if let Some(p) = create_peeker(&mut context, sender, id) {
+            if is_passive {
+                // keep client for later emission when we detect audio
+                let pending = Arc::new(Mutex::new(Some(client)));
+                if let Some(p) = create_peeker(&mut context, sender, id, Some(pending)) {
+                    let guard = peakers.lock();
+                    let mut peakers = guard.borrow_mut();
+                    peakers.push(p)
+                }
+            }
+            else if let Some(p) = create_peeker(&mut context, sender, id, None) {
                 let guard = peakers.lock();
                 let mut peakers = guard.borrow_mut();
 
@@ -449,23 +466,7 @@ fn add_sink_input(info: ListResult<&SinkInputInfo>, context: &WeakContext, sende
     }
 }
 
-fn peak_callback(stream: &mut Stream, sender: &Sender<Message>, i: u32) {
-    match stream.peek() {
-        Ok(PeekResult::Data(b)) => {
-            let bytes: [u8; 4] = unsafe { b.try_into().unwrap_unchecked() };
-            let peak: f32 = f32::from_ne_bytes(bytes);
-            let msg: Message = MessageClient::Peak(i, peak).into();
-
-            if peak != 0.0 { sender.emit(msg); }
-        }
-        Ok(PeekResult::Hole(_)) => {},
-        _ => return,
-    }
-
-    let _ = stream.discard();
-}
-
-fn create_peeker(context: &mut Context, sender: &Sender<Message>, i: u32) -> Option<Pb<Stream>> {
+fn create_peeker(context: &mut Context, sender: &Sender<Message>, i: u32, pending_client: Option<Arc<Mutex<Option<Box<OutputClient>>>>>) -> Option<Pb<Stream>> {
     use stream::FlagSet;
 
     const PEAK_BUF_ATTR: &BufferAttr = &BufferAttr {
@@ -498,11 +499,38 @@ fn create_peeker(context: &mut Context, sender: &Sender<Message>, i: u32) -> Opt
 
     let mut stream = Box::pin(stream);
 
+    // the callback owns an Arc to the pending client (if any) so we can emit the New message
+    // exactly once when we detect audio activity from a passive node.
     let peak_callback = Box::new({
         let sender = sender.clone();
+        let pending = pending_client.clone();
+        // SAFETY: we turn the pinned Box<Stream> into a raw mutable reference for the callback.
         let stream: &mut Stream = unsafe { &mut *(stream.as_mut().get_mut() as *mut Stream) };
 
-        move |_| peak_callback(stream, &sender, i)
+        move |_| {
+            match stream.peek() {
+                Ok(PeekResult::Data(b)) => {
+                    let bytes: [u8; 4] = unsafe { b.try_into().unwrap_unchecked() };
+                    let peak: f32 = f32::from_ne_bytes(bytes);
+
+                    if peak != 0.0 {
+                        if let Some(pending) = &pending {
+                            if let Some(client) = pending.lock().take() {
+                                let msg: Message = MessageClient::New(client).into();
+                                sender.emit(msg);
+                            }
+                        }
+
+                        let msg: Message = MessageClient::Peak(i, peak).into();
+                        sender.emit(msg);
+                    }
+                }
+                Ok(PeekResult::Hole(_)) => {},
+                _ => return,
+            }
+
+            let _ = stream.discard();
+        }
     });
 
     stream.set_read_callback(Some(peak_callback));
