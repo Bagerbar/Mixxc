@@ -20,6 +20,8 @@ use crate::widgets::sliderbox::{SliderBox, SliderMessage, Sliders};
 use crate::server::{self, AudioServer, AudioServerEnum, Kind, MessageClient, MessageOutput, VolumeLevels};
 use crate::widgets::switchbox::{SwitchBox, Switches};
 
+use crate::filter::{FilterConfig, load_config, should_show};
+
 pub static WM_CONFIG: OnceCell<WMConfig> = const { OnceCell::new() };
 
 pub struct App {
@@ -33,6 +35,7 @@ pub struct App {
 
     ready: Rc<Cell<bool>>,
     shutdown: Option<CancellationToken>,
+    filter: FilterConfig,
 }
 
 pub struct Config {
@@ -194,6 +197,12 @@ impl AsyncComponent for App {
         sliders.set_direction(wm_config.anchors, if config.horizontal { Orientation::Horizontal } else { Orientation::Vertical });
         sliders.per_process = config.per_process;
 
+        // load filter config (if any)
+        let mut cfg_path = crate::xdg::config_dir();
+        cfg_path.push(crate::APP_BINARY);
+        cfg_path.push("config.toml");
+        let filter_cfg = load_config(&cfg_path).unwrap_or_default();
+
         let model = App {
             server,
             max_volume: config.max_volume,
@@ -203,6 +212,7 @@ impl AsyncComponent for App {
             ready: Rc::new(Cell::new(false)),
             shutdown: None,
             close_after: wm_config.close_after,
+            filter: filter_cfg,
         };
 
         let switch_box = model.switches.container.widget();
@@ -385,11 +395,14 @@ impl App where App: AsyncComponent {
                 let mut client = *client;
                 client.max_volume = f64::min(client.max_volume, self.max_volume);
 
-                self.sliders.push_client(client);
+                // Apply filter: only push clients that should be shown
+                if should_show(&client.name, &self.filter) {
+                    self.sliders.push_client(client);
 
-                #[cfg(feature = "X11")]
-                if crate::xdg::is_x11() {
-                    window.size_allocate(&window.allocation(), -1);
+                    #[cfg(feature = "X11")]
+                    if crate::xdg::is_x11() {
+                        window.size_allocate(&window.allocation(), -1);
+                    }
                 }
             },
             MessageClient::Removed(id) => {
