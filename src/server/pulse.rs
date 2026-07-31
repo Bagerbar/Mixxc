@@ -438,11 +438,6 @@ fn add_sink_input(info: ListResult<&SinkInputInfo>, context: &WeakContext, sende
             && info.proplist.get_str("media.name").is_none()
             && info.proplist.get_str("node.name").is_some();
 
-        if !is_passive {
-            let msg: Message = MessageClient::New(client).into();
-            sender.emit(msg);
-        }
-
         let guard = context.lock();
         let mut context = guard.borrow_mut();
 
@@ -455,15 +450,35 @@ fn add_sink_input(info: ListResult<&SinkInputInfo>, context: &WeakContext, sende
                     let mut peakers = guard.borrow_mut();
                     peakers.push(p)
                 }
-            }
-            else if let Some(p) = create_peeker(&mut context, sender, id, None) {
-                let guard = peakers.lock();
-                let mut peakers = guard.borrow_mut();
+            } else {
+                let msg: Message = MessageClient::New(client).into();
+                sender.emit(msg);
 
-                peakers.push(p)
+                if let Some(p) = create_peeker(&mut context, sender, id, None) {
+                    let guard = peakers.lock();
+                    let mut peakers = guard.borrow_mut();
+
+                    peakers.push(p)
+                }
             }
         }
     }
+}
+
+fn peak_callback(stream: &mut Stream, sender: &Sender<Message>, i: u32) {
+    match stream.peek() {
+        Ok(PeekResult::Data(b)) => {
+            let bytes: [u8; 4] = unsafe { b.try_into().unwrap_unchecked() };
+            let peak: f32 = f32::from_ne_bytes(bytes);
+            let msg: Message = MessageClient::Peak(i, peak).into();
+
+            if peak != 0.0 { sender.emit(msg); }
+        }
+        Ok(PeekResult::Hole(_)) => {},
+        _ => return,
+    }
+
+    let _ = stream.discard();
 }
 
 fn create_peeker(context: &mut Context, sender: &Sender<Message>, i: u32, pending_client: Option<Arc<Mutex<Option<Box<OutputClient>>>>>) -> Option<Pb<Stream>> {
