@@ -49,6 +49,7 @@ pub struct Config {
     pub show_corked: bool,
     pub per_process: bool,
     pub userstyle: Option<std::path::PathBuf>,
++    pub hide_passive: bool,
 
     #[cfg(feature = "Accent")]
     pub accent: bool,
@@ -120,6 +121,7 @@ impl AsyncComponent for App {
                     add_css_class:   "main",
                     set_has_icons:   config.show_icons,
                     set_show_corked: config.show_corked,
++                    set_hide_passive: config.hide_passive,
                     set_spacing:     config.spacing,
                     set_max_value:   config.max_volume,
                     set_orientation: if config.horizontal {
@@ -309,151 +311,4 @@ impl AsyncComponent for App {
                     shutdown.cancel();
                 }
 
-                self.shutdown = Some(CancellationToken::new());
-                let token = self.shutdown.as_ref().unwrap().clone();
-
-                let duration = Duration::from_millis(self.close_after as u64);
-
-                sender.oneshot_command(async move {
-                    tokio::select! {
-                        _ = token.cancelled() => CommandMessage::Success,
-                        _ = tokio::time::sleep(duration) => {
-                            CommandMessage::Quit
-                        }
-                    }
-                })
-            }
-        }
-    }
-}
-
-impl App where App: AsyncComponent {
-    fn connect(server: Arc<AudioServerEnum>, sender: &AsyncComponentSender<Self>) {
-        sender.spawn_command(move |sender| match server.connect(&sender) {
-            Ok(_) | Err(server::error::Error::AlreadyConnected) => {},
-            Err(e) => panic!("{e}"),
-        })
-    }
-
-    fn handle_msg_cmd_server(&mut self, message: server::Message, sender: AsyncComponentSender<Self>, window: &<App as AsyncComponent>::Root) {
-        use server::Message::*;
-
-        match message {
-            OutputClient(msg) => self.handle_msg_output_client(msg, sender, window),
-            Output(msg) => self.handle_msg_output(msg),
-            Ready => if !self.ready.replace(true) {
-                window.set_visible(true);
-
-                let mut plan = Kind::Software
-                        .union(Kind::Out);
-
-                sender.oneshot_command({
-                    let sender = sender.command_sender().clone();
-                    let server = self.server.clone();
-                    let master = self.master;
-
-                    async move {
-                        if master {
-                            plan |= Kind::Hardware;
-
-                            server.request_outputs(&sender).await.unwrap();
-                            server.request_master(&sender).await.unwrap();
-                        }
-
-                        server.request_software(&sender).await.unwrap();
-                        server.subscribe(plan, &sender).await.unwrap();
-
-                        CommandMessage::Success
-                    }
-                });
-            }
-            Error(e) => eprintln!("{e}"),
-            Disconnected(Some(e)) => {
-                eprintln!("{e}");
-
-                self.server.disconnect();
-
-                self.ready.replace(false);
-
-                self.sliders.clear();
-                self.switches.clear();
-            }
-            Disconnected(None) => sender.command_sender().emit(CommandMessage::Quit),
-        }
-    }
-
-    #[allow(unused_variables)]
-    fn handle_msg_output_client(&mut self, message: MessageClient, sender: AsyncComponentSender<Self>, window: &<Self as AsyncComponent>::Root) {
-        match message {
-            MessageClient::Peak(id, peak) => {
-                self.sliders.send(id, SliderMessage::ServerPeak(peak));
-            },
-            MessageClient::Changed(client) => {
-                self.sliders.send(client.id, SliderMessage::ServerChange(client));
-            },
-            MessageClient::New(client) => {
-                let mut client = *client;
-                client.max_volume = f64::min(client.max_volume, self.max_volume);
-
-                // Debug print: show what we received and how the filter evaluates it
-                eprintln!("MIXXC-DEBUG: client id={} name='{}' description='{}' icon={:?}", client.id, client.name, client.description, client.icon);
-                let show_name = should_show(&client.name, &self.filter);
-                let show_description = should_show(&client.description, &self.filter);
-                eprintln!("MIXXC-DEBUG: should_show -> name={} description={} (whitelist.len={}, blacklist.len={}, use_regex={})",
-                          show_name, show_description, self.filter.whitelist.len(), self.filter.blacklist.len(), self.filter.use_regex);
-
-                // Apply filter: only push clients that should be shown (match name OR description)
-                if show_name || show_description {
-                    self.sliders.push_client(client);
-
-                    #[cfg(feature = "X11")]
-                    if crate::xdg::is_x11() {
-                        window.size_allocate(&window.allocation(), -1);
-                    }
-                }
-            },
-            MessageClient::Removed(id) => {
-                if !self.sliders.contains(id) { return }
-
-                self.sliders.send(id, SliderMessage::Removed);
-
-                sender.command({
-                    let sender = sender.input_sender().clone();
-
-                    move |_, shutdown| {
-                        shutdown.register(async move {
-                            tokio::time::sleep(Duration::from_millis(300)).await;
-                            sender.emit(ElementMessage::Remove { id })
-                        })
-                        .drop_on_shutdown()
-                    }
-                });
-            },
-        }
-    }
-
-    fn handle_msg_output(&mut self, msg: MessageOutput) {
-        match msg {
-            MessageOutput::New(output) => {
-                // Debug print: show what output we received
-                eprintln!("MIXXC-DEBUG: output name='{}' port='{}' master={}", output.name, output.port, output.master);
-                let show_name = should_show(&output.name, &self.filter);
-                let show_port = should_show(&output.port, &self.filter);
-                eprintln!("MIXXC-DEBUG: should_show -> name={} port={} (whitelist.len={}, blacklist.len={}, use_regex={})",
-                          show_name, show_port, self.filter.whitelist.len(), self.filter.blacklist.len(), self.filter.use_regex);
-
-                // Apply filter to outputs (sink nodes). Match against both name and port.
-                if show_name || show_port {
-                    self.switches.push(output);
-                }
-            },
-            MessageOutput::Master(output) => {
-                let show_name = should_show(&output.name, &self.filter);
-                let show_port = should_show(&output.port, &self.filter);
-                if show_name || show_port {
-                    self.switches.set_active(output);
-                }
-            }
-        }
-    }
-}
+{
