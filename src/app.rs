@@ -395,8 +395,15 @@ impl App where App: AsyncComponent {
                 let mut client = *client;
                 client.max_volume = f64::min(client.max_volume, self.max_volume);
 
-                // Apply filter: only push clients that should be shown
-                if should_show(&client.name, &self.filter) {
+                // Debug print: show what we received and how the filter evaluates it
+                eprintln!("MIXXC-DEBUG: client id={} name='{}' description='{}' icon={:?}", client.id, client.name, client.description, client.icon);
+                let show_name = should_show(&client.name, &self.filter);
+                let show_description = should_show(&client.description, &self.filter);
+                eprintln!("MIXXC-DEBUG: should_show -> name={} description={} (whitelist.len={}, blacklist.len={}, use_regex={})",
+                          show_name, show_description, self.filter.whitelist.len(), self.filter.blacklist.len(), self.filter.use_regex);
+
+                // Apply filter: only push clients that should be shown (match name OR description)
+                if show_name || show_description {
                     self.sliders.push_client(client);
 
                     #[cfg(feature = "X11")]
@@ -428,13 +435,22 @@ impl App where App: AsyncComponent {
     fn handle_msg_output(&mut self, msg: MessageOutput) {
         match msg {
             MessageOutput::New(output) => {
+                // Debug print: show what output we received
+                eprintln!("MIXXC-DEBUG: output name='{}' port='{}' master={}", output.name, output.port, output.master);
+                let show_name = should_show(&output.name, &self.filter);
+                let show_port = should_show(&output.port, &self.filter);
+                eprintln!("MIXXC-DEBUG: should_show -> name={} port={} (whitelist.len={}, blacklist.len={}, use_regex={})",
+                          show_name, show_port, self.filter.whitelist.len(), self.filter.blacklist.len(), self.filter.use_regex);
+
                 // Apply filter to outputs (sink nodes). Match against both name and port.
-                if should_show(&output.name, &self.filter) || should_show(&output.port, &self.filter) {
+                if show_name || show_port {
                     self.switches.push(output);
                 }
             },
             MessageOutput::Master(output) => {
-                if should_show(&output.name, &self.filter) || should_show(&output.port, &self.filter) {
+                let show_name = should_show(&output.name, &self.filter);
+                let show_port = should_show(&output.port, &self.filter);
+                if show_name || show_port {
                     self.switches.set_active(output);
                 }
             }
