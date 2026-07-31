@@ -733,7 +733,7 @@ impl <'a> From<&SinkInputInfo<'a>> for OutputClient {
         let app_name = sink_input.proplist.get_str("application.name");
         let media_name = sink_input.proplist.get_str("media.name");
         let node_name = sink_input.proplist.get_str("node.name");
-        let fallback_name = sink_input.name.as_ref().map(Cow::as_ref);
+        let fallback_name = sink_input.name.as_ref().map(|c| c.to_string());
 
         let name = app_name
             .or(media_name)
