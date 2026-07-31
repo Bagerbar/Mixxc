@@ -31,6 +31,9 @@ thiserror = "1.0"
 tokio = { version = "1.47", features = ["time", "macros", "fs", "io-util", "signal", "process"] }
 tokio-util = "0.7.16"
 tracker = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.7"
+regex = "1"
 
 [dependencies.x11rb]
 version = "0.13"
