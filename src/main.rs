@@ -178,6 +178,7 @@ mod proto;
 mod error;
 mod style;
 mod widgets;
+mod filter;
 
 #[cfg(feature = "Accent")]
 mod accent;

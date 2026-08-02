@@ -19,6 +19,7 @@ use crate::style::{self, StyleSettings};
 use crate::widgets::sliderbox::{SliderBox, SliderMessage, Sliders};
 use crate::server::{self, AudioServer, AudioServerEnum, Kind, MessageClient, MessageOutput, VolumeLevels};
 use crate::widgets::switchbox::{SwitchBox, Switches};
+use crate::filter::{self, FilterConfig};
 
 pub static WM_CONFIG: OnceCell<WMConfig> = const { OnceCell::new() };
 
@@ -33,6 +34,9 @@ pub struct App {
 
     ready: Rc<Cell<bool>>,
     shutdown: Option<CancellationToken>,
+
+    // filtering configuration loaded from $XDG_CONFIG_HOME/mixxc/config.toml
+    filter_cfg: FilterConfig,
 }
 
 pub struct Config {
@@ -179,6 +183,18 @@ impl AsyncComponent for App {
             CommandMessage::SetStyle(style)
         });
 
+        // Load filter config synchronously in a blocking task to avoid blocking the async runtime
+        let filter_cfg: FilterConfig = match crate::config_dir().await {
+            Ok(mut dir) => {
+                dir.push("config.toml");
+                match tokio::task::spawn_blocking(move || filter::load_config(&dir)).await {
+                    Ok(Ok(cfg)) => cfg,
+                    _ => FilterConfig::default(),
+                }
+            }
+            Err(_) => FilterConfig::default(),
+        };
+
         App::connect(server.clone(), &sender);
 
         sender.oneshot_command(async move {
@@ -203,6 +219,7 @@ impl AsyncComponent for App {
             ready: Rc::new(Cell::new(false)),
             shutdown: None,
             close_after: wm_config.close_after,
+            filter_cfg,
         };
 
         let switch_box = model.switches.container.widget();
@@ -384,6 +401,19 @@ impl App where App: AsyncComponent {
             MessageClient::New(client) => {
                 let mut client = *client;
                 client.max_volume = f64::min(client.max_volume, self.max_volume);
+
+                // Apply filtering: check application name and description in addition to the client name
+                let show = filter::should_show_with_fields(
+                    &client.name,
+                    Some(&client.name),
+                    None,
+                    Some(&client.description),
+                    &self.filter_cfg,
+                );
+
+                if !show {
+                    return;
+                }
 
                 self.sliders.push_client(client);
 
