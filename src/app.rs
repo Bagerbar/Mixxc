@@ -195,6 +195,12 @@ impl AsyncComponent for App {
             Err(_) => FilterConfig::default(),
         };
 
+        // Debug: print what we loaded so users can verify config path and contents
+        eprintln!(
+            "[mixxc] filter config: whitelist={:?} blacklist={:?} use_regex={}",
+            filter_cfg.whitelist, filter_cfg.blacklist, filter_cfg.use_regex
+        );
+
         App::connect(server.clone(), &sender);
 
         sender.oneshot_command(async move {
@@ -402,6 +408,9 @@ impl App where App: AsyncComponent {
                 let mut client = *client;
                 client.max_volume = f64::min(client.max_volume, self.max_volume);
 
+                // Debug: print client fields so we can see what the server provides
+                eprintln!("[mixxc] new client: id={} name='{}' description='{}'", client.id, client.name, client.description);
+
                 // Apply filtering: check application name and description in addition to the client name
                 let show = filter::should_show_with_fields(
                     &client.name,
@@ -410,6 +419,8 @@ impl App where App: AsyncComponent {
                     Some(&client.description),
                     &self.filter_cfg,
                 );
+
+                eprintln!("[mixxc] filter decision for id {}: show={} (checked name, application, description)", client.id, show);
 
                 if !show {
                     return;
